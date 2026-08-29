@@ -99,6 +99,34 @@ namespace ACE.Server.WorldObjects
         public WorldObject() { }
 
         /// <summary>
+        /// Returns the luminous multiplier for a caster and magic school.
+        /// E.g. if player has LuminousItemSpellPercent == 2, returns 1.02 for ItemEnchantment school.
+        /// </summary>
+        public static float GetLuminousMultiplier(WorldObject caster, ACE.Entity.Enum.MagicSchool school)
+        {
+            if (caster == null)
+                return 1.0f;
+
+            var player = caster as Player ?? caster.Wielder as Player;
+            if (player == null)
+                return 1.0f;
+
+            switch (school)
+            {
+                case ACE.Entity.Enum.MagicSchool.ItemEnchantment:
+                    return 1.0f + (player.LuminousItemSpellPercent / 100.0f);
+                case ACE.Entity.Enum.MagicSchool.CreatureEnchantment:
+                    return 1.0f + (player.LuminousCreatureSpellPercent / 100.0f);
+                case ACE.Entity.Enum.MagicSchool.LifeMagic:
+                    return 1.0f + (player.LuminousLifeSpellPercent / 100.0f);
+                case ACE.Entity.Enum.MagicSchool.WarMagic:
+                    return 1.0f + (player.LuminousWarSpellPercent / 100.0f);
+                default:
+                    return 1.0f;
+            }
+        }
+
+        /// <summary>
         /// A new biota will be created taking all of its values from weenie.
         /// </summary>
         protected WorldObject(Weenie weenie, ObjectGuid guid)

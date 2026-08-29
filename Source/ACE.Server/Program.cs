@@ -132,6 +132,31 @@ namespace ACE.Server
             var configFile = Path.Combine(exeLocation, "Config.js");
             var configConfigContainer = Path.Combine(containerConfigDirectory, "Config.js");
 
+            // Diagnostic logging to ensure required config files are present in the runtime folder.
+            try
+            {
+                var configExample = Path.Combine(exeLocation, "Config.js.example");
+                var bankablesPath = Path.Combine(exeLocation, "config", "bankables.json");
+
+                log.Info($"Runtime config check: Config.js exists={File.Exists(configFile)} (path={configFile})");
+                log.Info($"Runtime config check: Config.js.example exists={File.Exists(configExample)} (path={configExample})");
+                log.Info($"Runtime config check: bankables.json exists={File.Exists(bankablesPath)} (path={bankablesPath})");
+
+                if (Directory.Exists(Path.Combine(exeLocation, "config")))
+                {
+                    var files = Directory.GetFiles(Path.Combine(exeLocation, "config"));
+                    log.Info($"Runtime config folder contents: {string.Join(", ", files)}");
+                }
+                else
+                {
+                    log.Warn($"Runtime config folder not found at: {Path.Combine(exeLocation, "config")}");
+                }
+            }
+            catch (Exception ex)
+            {
+                log.Warn($"Failed runtime config diagnostics: {ex.Message}");
+            }
+
             if (IsRunningInContainer && File.Exists(configConfigContainer))
                 File.Copy(configConfigContainer, configFile, true);
 
@@ -246,7 +271,7 @@ namespace ACE.Server
             else
                 log.Info("DAT Patching Disabled...");
 
-            log.Info("Initializing DatabaseManager...");
+            log.Info("Starting DatabaseManager...");
             DatabaseManager.Initialize();
 
             if (DatabaseManager.InitializationFailure)
@@ -259,11 +284,27 @@ namespace ACE.Server
             log.Info("Starting DatabaseManager...");
             DatabaseManager.Start();
 
+            // Ensure core world schema exists; if missing, attempt automatic import
+            try
+            {
+                EnsureCoreWorldSchema();
+            }
+            catch (Exception ex)
+            {
+                log.Warn($"EnsureCoreWorldSchema failed: {ex.Message}");
+            }
+
             log.Info("Starting PropertyManager...");
             PropertyManager.Initialize();
 
+            log.Info("Initializing BankManager...");
+            ACE.Server.Managers.BankManager.Initialize();
+
             log.Info("Initializing GuidManager...");
             GuidManager.Initialize();
+
+            log.Info("Initializing LevelingManager...");
+            ACE.Server.Managers.LevelingManager.Initialize();
 
             if (ConfigManager.Config.Server.ServerPerformanceMonitorAutoStart)
             {
@@ -356,6 +397,15 @@ namespace ACE.Server
                     log.Warn("Unsafe server shutdown detected! Data loss is possible!");
 
                 PropertyManager.StopUpdating();
+                // Persist bank accounts before stopping databases to avoid data loss
+                try
+                {
+                    ACE.Server.Managers.BankManager.PersistAllAccounts();
+                }
+                catch (Exception ex)
+                {
+                    log.Warn("Failed to persist bank accounts on exit: " + ex.Message);
+                }
                 DatabaseManager.Stop();
 
                 // Do system specific cleanup here

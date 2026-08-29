@@ -492,6 +492,10 @@ namespace ACE.Server.WorldObjects
 
             int boost = tryBoost;
 
+            // apply luminous multiplier for caster (affects all spell schools of that type)
+            var lumMult = WorldObject.GetLuminousMultiplier(this, spell.School);
+            boost = (int)Math.Round(boost * lumMult);
+
             // handle cloak damage proc for harm other
             var equippedCloak = targetCreature?.EquippedCloak;
 

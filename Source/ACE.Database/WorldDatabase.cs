@@ -31,6 +31,40 @@ namespace ACE.Database
                     if (((RelationalDatabaseCreator)context.Database.GetService<IDatabaseCreator>()).Exists())
                     {
                         log.InfoFormat("[DATABASE] Successfully connected to {0} database on {1}:{2}.", config.Database, config.Host, config.Port);
+
+                        // Ensure custom server-managed tables exist (create if missing)
+                        try
+                        {
+                            // Table to store any custom persistent modifiers the server may need. Schema is intentionally small.
+                            var createSql = @"CREATE TABLE IF NOT EXISTS `player_permanent_modifiers` (
+  `player_id` INT NOT NULL,
+  `modifier_key` VARCHAR(64) NOT NULL,
+  `value` DECIMAL(9,3) NOT NULL DEFAULT 0.000,
+  PRIMARY KEY (`player_id`,`modifier_key`),
+  INDEX `idx_modifier_key` (`modifier_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;";
+
+                            context.Database.ExecuteSqlRaw(createSql);
+                            log.Info("[DATABASE] Ensured custom table 'player_permanent_modifiers' exists.");
+                            // Table to record PK history events (killer/victim/timestamp/location)
+                            var createPkHistory = @"CREATE TABLE IF NOT EXISTS `player_pk_history` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `killer_player_id` INT NOT NULL,
+  `victim_player_id` INT NOT NULL,
+  `event_time` DATETIME NOT NULL,
+  `cell` INT NULL,
+  PRIMARY KEY (`id`),
+  INDEX `idx_killer` (`killer_player_id`),
+  INDEX `idx_victim` (`victim_player_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;";
+
+                            context.Database.ExecuteSqlRaw(createPkHistory);
+                            log.Info("[DATABASE] Ensured custom table 'player_pk_history' exists.");
+                        }
+                        catch (Exception ex)
+                        {
+                            log.Warn($"[DATABASE] Failed to ensure custom tables exist: {ex.Message}");
+                        }
                         return true;
                     }
                 }

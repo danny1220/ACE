@@ -213,7 +213,10 @@ namespace ACE.Server.WorldObjects.Managers
             entry.EnchantmentCategory = (uint)spell.MetaSpellType;
             entry.SpellId = (int)spell.Id;
             entry.SpellCategory = spell.Category;
-            entry.PowerLevel = spell.Power;
+            // Apply caster luminous multiplier to enchantment power
+            var multiplierCaster = caster ?? WorldObject;
+            var lumMult = WorldObject.GetLuminousMultiplier(multiplierCaster, spell.School);
+            entry.PowerLevel = (uint)Math.Max(1, Math.Round(spell.Power * lumMult));
 
             if (caster is Creature)
             {

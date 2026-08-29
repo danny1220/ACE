@@ -26,7 +26,9 @@ namespace ACE.Server.Physics.Common
         public readonly bool IsStorage;
         public readonly bool IsCorpse;
 
-        public readonly bool IsMonster;
+        // Expose IsMonster as a property so external assemblies compiled against
+        // a previous API (which expected a get_IsMonster method) continue to work.
+        public bool IsMonster { get; private set; }
 
         public readonly bool IsCombatPet;
 

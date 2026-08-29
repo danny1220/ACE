@@ -50,6 +50,10 @@ namespace ACE.Server
                         var newVersion = worldDb.GetVersion();
                         log.Info($"Updated World Database version: Base - {newVersion.BaseVersion} | Patch - {newVersion.PatchVersion}");
                     }
+
+
+
+
                     else
                     {
                         log.Info($"Latest patch version is {tag} -- No Update Required!");
@@ -65,6 +69,79 @@ namespace ACE.Server
                 log.Info($"Unable to continue with Automatic World Database Update due to the following error: {ex}");
             }
             log.Info($"Automatic World Database Update complete.");
+        }
+
+        private static void EnsureCoreWorldSchema()
+        {
+            // check for a core table: biota_properties_int
+            var connStr = $"server={ConfigManager.Config.MySql.World.Host};port={ConfigManager.Config.MySql.World.Port};user={ConfigManager.Config.MySql.World.Username};password={ConfigManager.Config.MySql.World.Password};database={ConfigManager.Config.MySql.World.Database};{ConfigManager.Config.MySql.World.ConnectionOptions}";
+            using var conn = new MySqlConnector.MySqlConnection(connStr);
+            conn.Open();
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "SHOW TABLES LIKE 'biota_properties_int'";
+                var reader = cmd.ExecuteReader();
+                var has = reader.Read();
+                reader.Close();
+                if (has)
+                {
+                    conn.Close();
+                    return; // schema present
+                }
+            }
+
+            // Schema missing - attempt to import Database/Base then Database/Updates from repo
+            var exeLocation = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+            var repoRoot = Path.GetFullPath(Path.Combine(exeLocation, "..", "..", "..", ".."));
+            var baseDir = Path.Combine(repoRoot, "Database", "Base");
+            var updatesDir = Path.Combine(repoRoot, "Database", "Updates");
+
+            Console.WriteLine("Core world schema missing; attempting automatic import of Database/Base and Database/Updates...");
+
+            // apply base files
+            if (Directory.Exists(baseDir))
+            {
+                var files = Directory.GetFiles(baseDir, "*.sql", SearchOption.AllDirectories).OrderBy(f => f).ToList();
+                foreach (var file in files)
+                {
+                    Console.WriteLine($"Applying base file: {file}");
+                    var text = File.ReadAllText(file).Replace("ace_world", ConfigManager.Config.MySql.World.Database);
+                    var script = new MySqlConnector.MySqlCommand(text, conn);
+                    try
+                    {
+                        ExecuteScript(script);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Failed to apply base SQL file {file}: {ex.Message}");
+                        throw;
+                    }
+                }
+            }
+
+            // apply updates
+            if (Directory.Exists(updatesDir))
+            {
+                var files = Directory.GetFiles(updatesDir, "*.sql", SearchOption.AllDirectories).OrderBy(f => f).ToList();
+                foreach (var file in files)
+                {
+                    Console.WriteLine($"Applying update file: {file}");
+                    var text = File.ReadAllText(file).Replace("ace_world", ConfigManager.Config.MySql.World.Database);
+                    var script = new MySqlConnector.MySqlCommand(text, conn);
+                    try
+                    {
+                        ExecuteScript(script);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Failed to apply update SQL file {file}: {ex.Message}");
+                        throw;
+                    }
+                }
+            }
+
+            conn.Close();
+            Console.WriteLine("Automatic core world schema import complete.");
         }
 
         private static void UpdateToLatestWorldDatabase(string dbURL, string dbFileName)
@@ -110,15 +187,32 @@ namespace ACE.Server
 
                 var dbname = ConfigManager.Config.MySql.World.Database;
 
+                var currentDelimiter = ";";
+
                 while ((line = sr.ReadLine()) != null)
                 {
-                    line = line.Replace("ace_world", dbname);
-                    //do minimal amount of work here
-                    if (line.EndsWith(";"))
+                    var trimmed = line.Trim();
+                    if (trimmed.StartsWith("DELIMITER ", StringComparison.OrdinalIgnoreCase))
                     {
-                        completeSQLline += line + Environment.NewLine;
+                        currentDelimiter = trimmed.Substring("DELIMITER ".Length);
+                        continue;
+                    }
 
-                        var script = new MySqlConnector.MySqlCommand(completeSQLline, sqlConnect);
+                    line = line.Replace("ace_world", dbname);
+
+                    completeSQLline += line + Environment.NewLine;
+
+                    if (trimmed.EndsWith(currentDelimiter))
+                    {
+                        var sqlToExec = completeSQLline;
+                        if (currentDelimiter != ";")
+                        {
+                            var idx = sqlToExec.LastIndexOf(currentDelimiter, StringComparison.Ordinal);
+                            if (idx >= 0)
+                                sqlToExec = sqlToExec.Substring(0, idx);
+                        }
+
+                        var script = new MySqlConnector.MySqlCommand(sqlToExec, sqlConnect);
                         try
                         {
                             ExecuteScript(script);
@@ -129,8 +223,6 @@ namespace ACE.Server
                         }
                         completeSQLline = string.Empty;
                     }
-                    else
-                        completeSQLline += line + Environment.NewLine;
                 }
                 CleanupConnection(sqlConnect);
             }
@@ -178,6 +270,15 @@ namespace ACE.Server
 
         private static void AutoApplyWorldCustomizations()
         {
+            // Ensure core world schema exists; if not, attempt to import Database/Base and Database/Updates automatically.
+            try
+            {
+                EnsureCoreWorldSchema();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: EnsureCoreWorldSchema failed: {ex.Message}");
+            }
             var content_folders_search_option = ConfigManager.Config.Offline.RecurseWorldCustomizationPaths ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
             var content_folders = new List<string> { GetContentFolder() };
             content_folders.AddRange(ConfigManager.Config.Offline.WorldCustomizationAddedPaths);

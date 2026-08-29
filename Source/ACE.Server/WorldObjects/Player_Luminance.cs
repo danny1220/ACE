@@ -65,10 +65,28 @@ namespace ACE.Server.WorldObjects
 
             AvailableLuminance = available + addAmount;
 
-            if (xpType == XpType.Quest)
-                Session.Network.EnqueueSend(new GameMessageSystemChat($"You've earned {amount:N0} Luminance.", ChatMessageType.Broadcast));
+            if (addAmount > 0)
+                Session.Network.EnqueueSend(new GameMessageSystemChat($"You've gained {addAmount:N0} luminance.", ChatMessageType.Broadcast));
 
+            // Update player's available luminance on the client
             UpdateLuminance();
+
+            // Track accumulated luminance (lifetime earned) and persist occasionally
+            try
+            {
+                var acc = GetProperty(ACE.Entity.Enum.Properties.PropertyInt64.AccumulatedLuminance) ?? 0L;
+                var newAcc = acc + addAmount;
+                SetProperty(ACE.Entity.Enum.Properties.PropertyInt64.AccumulatedLuminance, newAcc);
+                // send private update for accumulated luminance so player can see progress if UI supports it
+                Session.Network.EnqueueSend(new GameMessagePrivateUpdatePropertyInt64(this, ACE.Entity.Enum.Properties.PropertyInt64.AccumulatedLuminance, newAcc));
+
+                // Persist periodically to avoid excessive DB writes: every 100k earned or when crossing 5,000,000
+                if (newAcc >= 5000000 || (newAcc / 100000) != (acc / 100000))
+                {
+                    SaveBiotaToDatabase();
+                }
+            }
+            catch { }
         }
 
         /// <summary>

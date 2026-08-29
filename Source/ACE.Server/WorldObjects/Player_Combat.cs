@@ -44,7 +44,28 @@ namespace ACE.Server.WorldObjects
         public double PkTimestamp
         {
             get => GetProperty(PropertyFloat.PkTimestamp) ?? 0;
-            set { if (value == 0) RemoveProperty(PropertyFloat.PkTimestamp); else SetProperty(PropertyFloat.PkTimestamp, value); }
+            set
+            {
+                if (value == 0)
+                    RemoveProperty(PropertyFloat.PkTimestamp);
+                else
+                    SetProperty(PropertyFloat.PkTimestamp, value);
+
+                // Best-effort: Sync PK timestamp / state to PK audit DB
+                try
+                {
+                    var state = new ACE.Database.Models.PkAudit.PkPlayerState()
+                    {
+                        PlayerId = this.Guid.Full,
+                        PkTimestamp = value,
+                        PkLevel = (int)this.PkLevel,
+                        PlayerKillsPk = this.PlayerKillsPk ?? 0,
+                        PlayerKillsPkl = this.PlayerKillsPkl ?? 0
+                    };
+                    ACE.Database.DatabaseManager.PkAudit.WritePlayerState(state);
+                }
+                catch { }
+            }
         }
 
         /// <summary>

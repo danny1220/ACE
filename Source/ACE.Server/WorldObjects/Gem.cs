@@ -10,11 +10,14 @@ using ACE.Server.Factories;
 using ACE.Server.Network.GameEvent.Events;
 using ACE.Server.Network.GameMessages.Messages;
 using ACE.Server.Physics;
+using Microsoft.EntityFrameworkCore;
+using log4net;
 
 namespace ACE.Server.WorldObjects
 {
     public class Gem : Stackable
     {
+        private static readonly ILog log = LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
         /// <summary>
         /// A new biota be created taking all of its values from weenie.
         /// </summary>
@@ -46,6 +49,7 @@ namespace ACE.Server.WorldObjects
         /// </summary>
         public override void ActOnUse(WorldObject activator)
         {
+            log.Info($"ActOnUse called for Gem {WeenieClassId} by activator {activator?.Name}");
             ActOnUse(activator, false);
         }
 
@@ -115,6 +119,7 @@ namespace ACE.Server.WorldObjects
 
         public void UseGem(Player player)
         {
+            log.Info($"UseGem invoked for Gem {WeenieClassId} by player {player?.Name}");
             if (player.IsDead) return;
 
             // verify item is still valid
@@ -143,6 +148,89 @@ namespace ACE.Server.WorldObjects
 
                 // local broadcast usage
                 player.EnqueueBroadcast(new GameMessageSystemChat($"{player.Name} used the rare item {Name}", ChatMessageType.Broadcast));
+            }
+
+            // Handle luminous gems (WCID 40000500..40000503) before spell handling
+            if (WeenieClassId == 40000500u || WeenieClassId == 40000501u || WeenieClassId == 40000502u || WeenieClassId == 40000503u)
+            {
+                const long RequiredAccumulated = 5000000L;
+                var acc = player.GetProperty(ACE.Entity.Enum.Properties.PropertyInt64.AccumulatedLuminance) ?? 0L;
+                if (acc < RequiredAccumulated)
+                {
+                    player.Session.Network.EnqueueSend(new GameMessageSystemChat($"You do not have sufficient accumulated luminance to use this item (need {RequiredAccumulated:N0}).", ChatMessageType.System));
+                    return;
+                }
+
+                // consume item
+                if (!player.TryConsumeFromInventoryWithNetworking(this, 1))
+                {
+                    player.Session.Network.EnqueueSend(new GameMessageSystemChat("Failed to consume item.", ChatMessageType.Broadcast));
+                    return;
+                }
+
+                // apply permanent +2% based on weenie
+                try
+                {
+                    if (WeenieClassId == 40000500u)
+                    {
+                        player.LuminousItemSpellPercent += 2;
+                        player.Session.Network.EnqueueSend(new GameMessagePrivateUpdatePropertyInt(player, PropertyInt.LuminousItemSpellPercent, player.LuminousItemSpellPercent));
+                        player.Session.Network.EnqueueSend(new GameMessageSystemChat($"Your Item Enchantment is now {player.LuminousItemSpellPercent}% stronger.", ChatMessageType.System));
+                        using (var ctx = new ACE.Database.Models.World.WorldDbContext())
+                        {
+                            var sql = $"INSERT INTO player_permanent_modifiers (player_id, modifier_key, value) VALUES ({player.Guid.Full}, 'luminous:item', 2) ON DUPLICATE KEY UPDATE value = value + 2;";
+                            ctx.Database.ExecuteSqlRaw(sql);
+                        }
+                    }
+                    else if (WeenieClassId == 40000501u)
+                    {
+                        player.LuminousCreatureSpellPercent += 2;
+                        player.Session.Network.EnqueueSend(new GameMessagePrivateUpdatePropertyInt(player, PropertyInt.LuminousCreatureSpellPercent, player.LuminousCreatureSpellPercent));
+                        player.Session.Network.EnqueueSend(new GameMessageSystemChat($"Your Creature Enchantment is now {player.LuminousCreatureSpellPercent}% stronger.", ChatMessageType.System));
+                        using (var ctx = new ACE.Database.Models.World.WorldDbContext())
+                        {
+                            var sql = $"INSERT INTO player_permanent_modifiers (player_id, modifier_key, value) VALUES ({player.Guid.Full}, 'luminous:creature', 2) ON DUPLICATE KEY UPDATE value = value + 2;";
+                            ctx.Database.ExecuteSqlRaw(sql);
+                        }
+                    }
+                    else if (WeenieClassId == 40000502u)
+                    {
+                        player.LuminousLifeSpellPercent += 2;
+                        player.Session.Network.EnqueueSend(new GameMessagePrivateUpdatePropertyInt(player, PropertyInt.LuminousLifeSpellPercent, player.LuminousLifeSpellPercent));
+                        player.Session.Network.EnqueueSend(new GameMessageSystemChat($"Your Life Magic is now {player.LuminousLifeSpellPercent}% stronger.", ChatMessageType.System));
+                        using (var ctx = new ACE.Database.Models.World.WorldDbContext())
+                        {
+                            var sql = $"INSERT INTO player_permanent_modifiers (player_id, modifier_key, value) VALUES ({player.Guid.Full}, 'luminous:life', 2) ON DUPLICATE KEY UPDATE value = value + 2;";
+                            ctx.Database.ExecuteSqlRaw(sql);
+                        }
+                    }
+                    else if (WeenieClassId == 40000503u)
+                    {
+                        player.LuminousWarSpellPercent += 2;
+                        player.Session.Network.EnqueueSend(new GameMessagePrivateUpdatePropertyInt(player, PropertyInt.LuminousWarSpellPercent, player.LuminousWarSpellPercent));
+                        player.Session.Network.EnqueueSend(new GameMessageSystemChat($"Your War Magic is now {player.LuminousWarSpellPercent}% stronger.", ChatMessageType.System));
+                        using (var ctx = new ACE.Database.Models.World.WorldDbContext())
+                        {
+                            var sql = $"INSERT INTO player_permanent_modifiers (player_id, modifier_key, value) VALUES ({player.Guid.Full}, 'luminous:war', 2) ON DUPLICATE KEY UPDATE value = value + 2;";
+                            ctx.Database.ExecuteSqlRaw(sql);
+                        }
+                    }
+
+                    // Deduct accumulated luminance cost and notify
+                    var newAcc = acc - RequiredAccumulated;
+                    if (newAcc < 0) newAcc = 0;
+                    player.SetProperty(ACE.Entity.Enum.Properties.PropertyInt64.AccumulatedLuminance, newAcc);
+                    player.Session.Network.EnqueueSend(new GameMessagePrivateUpdatePropertyInt64(player, ACE.Entity.Enum.Properties.PropertyInt64.AccumulatedLuminance, newAcc));
+                    player.Session.Network.EnqueueSend(new GameMessageSystemChat($"Luminous item used: {RequiredAccumulated:N0} accumulated luminance consumed. Remaining: {newAcc:N0}.", ChatMessageType.System));
+                    player.SaveBiotaToDatabase();
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    log.Warn($"Luminous gem use failed for {player.Name}: {ex.Message}");
+                    player.Session.Network.EnqueueSend(new GameMessageSystemChat("Luminous item use failed due to server error.", ChatMessageType.System));
+                    return;
+                }
             }
 
             if (SpellDID.HasValue)

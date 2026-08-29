@@ -136,6 +136,16 @@
     </None>
   </ItemGroup>
 
+  <!-- Ensure config files (including bankables.json) are copied to the output directory -->
+  <ItemGroup>
+    <Content Include="config\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <None Include="Config.js.example">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
   <ItemGroup>
     <EmbeddedResource Include="Entity\Mutations\ArmorLevel\armor_level_extremity.txt" />
     <EmbeddedResource Include="Entity\Mutations\ArmorLevel\armor_level_non_extremity.txt" />
@@ -292,8 +302,13 @@
   </ItemGroup>
 
   <Target Name="PreBuild" BeforeTargets="PreBuildEvent">
-    <Exec Command="if exist &quot;$(ProjectDir)Config.js&quot; copy &quot;$(ProjectDir)Config.js&quot; &quot;$(TargetDir)Config.js&quot;&#xD;&#xA;if not exist &quot;$(ProjectDir)log4net.config&quot; if exist &quot;$(TargetDir)log4net.config&quot; copy &quot;$(TargetDir)log4net.config&quot; &quot;$(ProjectDir)log4net.config&quot;&#xD;&#xA;if exist &quot;$(ProjectDir)log4net.config&quot; copy &quot;$(ProjectDir)log4net.config&quot; &quot;$(TargetDir)log4net.config&quot;" Condition="'$(OS)' == 'Windows_NT'" />
-    <Exec Command="if [ -f &quot;$(ProjectDir)Config.js&quot; ] ; then cp &quot;$(ProjectDir)Config.js&quot; &quot;$(TargetDir)Config.js&quot; ; fi&#xD;&#xA;if [ ! -f &quot;$(ProjectDir)log4net.config&quot; ] &amp;&amp; [ -f &quot;$(TargetDir)log4net.config&quot; ] ; then cp &quot;$(TargetDir)log4net.config&quot; &quot;$(ProjectDir)log4net.config&quot; ; fi&#xD;&#xA;if [ -f &quot;$(ProjectDir)log4net.config&quot; ] ; then cp &quot;$(ProjectDir)log4net.config&quot; &quot;$(TargetDir)log4net.config&quot; ; fi" Condition="'$(OS)' != 'Windows_NT'" />
+    <!-- If a project-level Config.js doesn't exist, fall back to Config.js.example so runtime has a config to load. -->
+    <!-- Also support a user-supplied server copy under "My Server\Server" (common local setup). -->
+    <Exec Command="if exist &quot;$(ProjectDir)My Server\Server\Config.js&quot; (copy &quot;$(ProjectDir)My Server\Server\Config.js&quot; &quot;$(TargetDir)Config.js&quot;) else if exist &quot;$(ProjectDir)Config.js&quot; (copy &quot;$(ProjectDir)Config.js&quot; &quot;$(TargetDir)Config.js&quot;) else if exist &quot;$(ProjectDir)Config.js.example&quot; (copy &quot;$(ProjectDir)Config.js.example&quot; &quot;$(TargetDir)Config.js&quot;)" Condition="'$(OS)' == 'Windows_NT'" />
+    <!-- Copy config folder from My Server\Server if present -->
+    <Exec Command="if exist &quot;$(ProjectDir)My Server\Server\config\*&quot; xcopy &quot;$(ProjectDir)My Server\Server\config\*&quot; &quot;$(TargetDir)config\\&quot; /E /I /Y" Condition="'$(OS)' == 'Windows_NT'" />
+    <Exec Command="if exist &quot;$(ProjectDir)config\*&quot; xcopy &quot;$(ProjectDir)config\*&quot; &quot;$(TargetDir)config\\&quot; /E /I /Y" Condition="'$(OS)' == 'Windows_NT'" />
+    <Exec Command="if [ -f &quot;$(ProjectDir)My Server/Server/Config.js&quot; ] ; then cp -r &quot;$(ProjectDir)My Server/Server/Config.js&quot; &quot;$(TargetDir)Config.js&quot; ; elif [ -f &quot;$(ProjectDir)Config.js&quot; ] ; then cp -r &quot;$(ProjectDir)Config.js&quot; &quot;$(TargetDir)Config.js&quot; ; elif [ -f &quot;$(ProjectDir)Config.js.example&quot; ] ; then cp -r &quot;$(ProjectDir)Config.js.example&quot; &quot;$(TargetDir)Config.js&quot; ; fi&#xD;&#xA;if [ -d &quot;$(ProjectDir)My Server/Server/config&quot; ] ; then cp -r &quot;$(ProjectDir)My Server/Server/config&quot; &quot;$(TargetDir)config&quot; ; elif [ -d &quot;$(ProjectDir)config&quot; ] ; then cp -r &quot;$(ProjectDir)config&quot; &quot;$(TargetDir)config&quot; ; fi&#xD;&#xA;if [ ! -f &quot;$(ProjectDir)log4net.config&quot; ] &amp;&amp; [ -f &quot;$(TargetDir)log4net.config&quot; ] ; then cp &quot;$(TargetDir)log4net.config&quot; &quot;$(ProjectDir)log4net.config&quot; ; fi&#xD;&#xA;if [ -f &quot;$(ProjectDir)log4net.config&quot; ] ; then cp &quot;$(ProjectDir)log4net.config&quot; &quot;$(TargetDir)log4net.config&quot; ; fi" Condition="'$(OS)' != 'Windows_NT'" />
   </Target>
 
   <ItemGroup>

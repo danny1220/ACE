@@ -21,6 +21,8 @@ namespace ACE.Database
 
         public static ShardConfigDatabase ShardConfig { get; } = new ShardConfigDatabase();
 
+        public static PkAuditDatabase PkAudit { get; } = new PkAuditDatabase();
+
         public static bool InitializationFailure = false;
 
         public static void Initialize(bool autoRetry = true)
@@ -58,6 +60,16 @@ namespace ACE.Database
             Shard = serializedShardDb;
 
             shardDb.Exists(true);
+
+            // Initialize optional PK audit database if configured
+            try
+            {
+                PkAudit.Exists(true);
+            }
+            catch (Exception ex)
+            {
+                log.Warn("PK Audit database initialization failed: " + ex.Message);
+            }
         }
 
         public static bool AutoPromoteNextAccountToAdmin { get; set; }
@@ -65,12 +77,21 @@ namespace ACE.Database
         public static void Start()
         {
             serializedShardDb.Start();
+            // PK audit background worker will be started during Exists() when configured; nothing to do here
         }
 
         public static void Stop()
         {
             if (serializedShardDb != null)
                 serializedShardDb.Stop();
+            try
+            {
+                PkAudit?.Stop();
+            }
+            catch (Exception ex)
+            {
+                log.Warn("Failed to stop PK audit database worker: " + ex.Message);
+            }
         }
 
         private static readonly ConcurrentDictionary<string, ServerVersion> cachedServerVersions = new();

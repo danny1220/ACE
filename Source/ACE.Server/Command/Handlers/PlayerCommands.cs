@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 using log4net;
 
@@ -22,6 +23,8 @@ namespace ACE.Server.Command.Handlers
     {
         private static readonly ILog log = LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
 
+        // Register bank aliases: /b /d /w /s /bal
+
         // pop
         [CommandHandler("pop", AccessLevel.Player, CommandHandlerFlag.None, 0,
             "Show current world population",
@@ -29,6 +32,211 @@ namespace ACE.Server.Command.Handlers
         public static void HandlePop(Session session, params string[] parameters)
         {
             CommandHandlerHelper.WriteOutputInfo(session, $"Current world population: {PlayerManager.GetOnlineCount():N0}", ChatMessageType.Broadcast);
+        }
+
+        // /b is the canonical bank command. Use /b <subcommand> where subcommand may be abbreviated:
+        // d = deposit, w = withdraw, s = send, b = balance
+        [CommandHandler("b", AccessLevel.Player, CommandHandlerFlag.RequiresWorld, "Player bank shorthand: /b <d|w|s|b>")]
+        public static void HandleBank_shorthand(Session session, params string[] parameters)
+        {
+            if (session?.Player == null)
+                return;
+
+            if (parameters.Length == 0)
+            {
+                // show help matching /bank help
+                session.Network.EnqueueSend(new GameMessageSystemChat("Bank commands: /b d <amount|name amount|all> | /b withdraw <amount> | /b send <acct> <amount> | /b b (balance)", ChatMessageType.Broadcast));
+                return;
+            }
+
+            // Map single-letter subcommands to full names
+            var sub = parameters[0]?.ToLower() ?? string.Empty;
+            string expanded;
+            if (sub == "d") expanded = "deposit";
+            else if (sub == "w") expanded = "withdraw";
+            else if (sub == "s") expanded = "send";
+            else if (sub == "b" || sub == "bal") expanded = "balance";
+            else if (sub == "c") expanded = "create";
+            else expanded = sub; // allow full words as well
+
+            var newParams = new string[parameters.Length];
+            newParams[0] = expanded;
+            for (int i = 1; i < parameters.Length; i++) newParams[i] = parameters[i];
+
+            HandleBank(session, newParams);
+        }
+
+        [CommandHandler("bank", AccessLevel.Player, CommandHandlerFlag.RequiresWorld, "Player bank commands: create, deposit, deposit-notes, withdraw, send, balance")]
+        public static void HandleBank(Session session, params string[] parameters)
+        {
+            if (session?.Player == null)
+                return;
+
+            if (parameters.Length == 0)
+            {
+                session.Network.EnqueueSend(new GameMessageSystemChat("Bank commands: /bank create | /bank deposit <amount> | /bank deposit-notes | /bank withdraw <amount> | /bank send <acct> <amount> | /bank balance", ChatMessageType.Broadcast));
+                return;
+            }
+
+            var cmd = parameters[0].ToLower();
+            // map short aliases
+            if (cmd == "d") cmd = "deposit";
+            if (cmd == "w") cmd = "withdraw";
+            if (cmd == "s") cmd = "send";
+            if (cmd == "bal") cmd = "balance";
+            var player = session.Player;
+
+            try
+            {
+                switch (cmd)
+                {
+                    case "create":
+                        var acct = Managers.BankManager.CreateAccount(player);
+                        session.Network.EnqueueSend(new GameMessageSystemChat($"Bank account created: {acct.AccountNumber}", ChatMessageType.Broadcast));
+                        break;
+                    case "deposit":
+                        // support: /bank deposit <amount>
+                        // or: /bank deposit <name> <amount>
+                        // or: /bank deposit all
+                        if (parameters.Length == 1)
+                        {
+                            session.Network.EnqueueSend(new GameMessageSystemChat("Usage: /bank deposit <amount|name amount|all>", ChatMessageType.Broadcast));
+                            break;
+                        }
+
+                        if (parameters.Length == 2)
+                        {
+                            var p1 = parameters[1];
+                            if (p1.Equals("all", StringComparison.OrdinalIgnoreCase))
+                            {
+                                var accall = Managers.BankManager.GetAccountByOwner(player.Guid.Full);
+                                if (accall == null) { session.Network.EnqueueSend(new GameMessageSystemChat("You must create a bank account first with /bank create", ChatMessageType.Broadcast)); break; }
+                                if (Managers.BankManager.DepositAllBankables(player, out var res))
+                                {
+                                    foreach (var r in res) session.Network.EnqueueSend(new GameMessageSystemChat(r, ChatMessageType.Broadcast));
+                                }
+                                else session.Network.EnqueueSend(new GameMessageSystemChat("No bankables deposited.", ChatMessageType.Broadcast));
+                                break;
+                            }
+
+                            if (long.TryParse(p1, out var amt1))
+                            {
+                                var accd = Managers.BankManager.GetAccountByOwner(player.Guid.Full);
+                                if (accd == null) { session.Network.EnqueueSend(new GameMessageSystemChat("You must create a bank account first with /bank create", ChatMessageType.Broadcast)); break; }
+                                if (!Managers.BankManager.DepositPyreals(player, amt1))
+                                    session.Network.EnqueueSend(new GameMessageSystemChat("Deposit failed: not enough pyreals in inventory.", ChatMessageType.Broadcast));
+                                else
+                                    session.Network.EnqueueSend(new GameMessageSystemChat($"Deposited {amt1} pyreals to account {accd.AccountNumber}", ChatMessageType.Broadcast));
+                                break;
+                            }
+
+                            session.Network.EnqueueSend(new GameMessageSystemChat("Invalid deposit parameters.", ChatMessageType.Broadcast));
+                            break;
+                        }
+
+                        // parameters.Length >=3: name may be multi-word; amount is last token
+                        var amountStr = parameters.Last();
+                        var nameParts = parameters.Skip(1).Take(parameters.Length - 2).ToArray();
+                        var name = string.Join(" ", nameParts);
+                        var accx = Managers.BankManager.GetAccountByOwner(player.Guid.Full);
+                        if (accx == null) { session.Network.EnqueueSend(new GameMessageSystemChat("You must create a bank account first with /bank create", ChatMessageType.Broadcast)); break; }
+                        var (depOk, msg) = Managers.BankManager.DepositByName(player, name, amountStr);
+                        session.Network.EnqueueSend(new GameMessageSystemChat(msg, ChatMessageType.Broadcast));
+                        break;
+                    case "deposit-notes":
+                        var accn = Managers.BankManager.GetAccountByOwner(player.Guid.Full);
+                        if (accn == null) { session.Network.EnqueueSend(new GameMessageSystemChat("You must create a bank account first with /bank create", ChatMessageType.Broadcast)); break; }
+                        var total = Managers.BankManager.DepositTradeNotesAsPyreals(player);
+                        session.Network.EnqueueSend(new GameMessageSystemChat($"Converted trade notes and deposited {total} pyreals to account {accn.AccountNumber}", ChatMessageType.Broadcast));
+                        break;
+                    case "withdraw":
+                        if (parameters.Length < 2)
+                        {
+                            session.Network.EnqueueSend(new GameMessageSystemChat("Usage: /bank withdraw <amount|name amount>", ChatMessageType.Broadcast));
+                            break;
+                        }
+
+                        // if single parameter and numeric -> withdraw pyreals
+                        if (parameters.Length == 2 && long.TryParse(parameters[1], out var wam2))
+                        {
+                            var accw2 = Managers.BankManager.GetAccountByOwner(player.Guid.Full);
+                            if (accw2 == null) { session.Network.EnqueueSend(new GameMessageSystemChat("You must create a bank account first with /bank create", ChatMessageType.Broadcast)); break; }
+                            if (!Managers.BankManager.WithdrawToPlayer(player, (int)wam2, out var msgw))
+                                session.Network.EnqueueSend(new GameMessageSystemChat($"Withdraw failed: {msgw}", ChatMessageType.Broadcast));
+                            else
+                                session.Network.EnqueueSend(new GameMessageSystemChat(msgw, ChatMessageType.Broadcast));
+                            break;
+                        }
+
+                        // parameters >=3: name may be multi-word; amount is last
+                        var amtStr = parameters.Last();
+                        var nmParts = parameters.Skip(1).Take(parameters.Length - 2).ToArray();
+                        var nm = string.Join(" ", nmParts);
+                        if (!int.TryParse(amtStr, out var wamt) || wamt <= 0)
+                        {
+                            session.Network.EnqueueSend(new GameMessageSystemChat("Invalid amount", ChatMessageType.Broadcast)); break;
+                        }
+                        var accw3 = Managers.BankManager.GetAccountByOwner(player.Guid.Full);
+                        if (accw3 == null) { session.Network.EnqueueSend(new GameMessageSystemChat("You must create a bank account first with /bank create", ChatMessageType.Broadcast)); break; }
+                        if (!Managers.BankManager.WithdrawToPlayer(player, nm, wamt, out var withdrawMsg))
+                            session.Network.EnqueueSend(new GameMessageSystemChat($"Withdraw failed: {withdrawMsg}", ChatMessageType.Broadcast));
+                        else
+                            session.Network.EnqueueSend(new GameMessageSystemChat(withdrawMsg, ChatMessageType.Broadcast));
+                        break;
+                    case "send":
+                        // Support two formats:
+                        // /b s <account> <amount>          -- send pyreals
+                        // /b s <account> <item> <amount>   -- send named item (e.g., pyreals) or stored item
+                        if (parameters.Length < 3)
+                        {
+                            session.Network.EnqueueSend(new GameMessageSystemChat("Usage: /b s <account> <amount>  OR  /b s <account> <item> <amount>", ChatMessageType.Broadcast));
+                            break;
+                        }
+
+                        var fromAcct = Managers.BankManager.GetAccountByOwner(player.Guid.Full);
+                        if (fromAcct == null) { session.Network.EnqueueSend(new GameMessageSystemChat("You must create a bank account first with /bank create", ChatMessageType.Broadcast)); break; }
+
+                        if (parameters.Length == 3 && long.TryParse(parameters[2], out var sendAmount))
+                        {
+                            var transferOk = Managers.BankManager.TransferBetweenAccounts(fromAcct.AccountNumber, parameters[1], sendAmount);
+                            if (!transferOk)
+                                session.Network.EnqueueSend(new GameMessageSystemChat("Transfer failed. Check account numbers and balance.", ChatMessageType.Broadcast));
+                            else
+                                session.Network.EnqueueSend(new GameMessageSystemChat($"Transferred {sendAmount} pyreals to account {parameters[1]}", ChatMessageType.Broadcast));
+                            break;
+                        }
+
+                        if (parameters.Length >= 4 && long.TryParse(parameters[3], out var itemAmount))
+                        {
+                            var toAccount = parameters[1];
+                            var itemName = parameters[2];
+                            if (!Managers.BankManager.TransferBetweenAccounts(fromAcct.AccountNumber, toAccount, itemName, itemAmount, out var transferMsg))
+                                session.Network.EnqueueSend(new GameMessageSystemChat($"Send failed: {transferMsg}", ChatMessageType.Broadcast));
+                            else
+                                session.Network.EnqueueSend(new GameMessageSystemChat(transferMsg, ChatMessageType.Broadcast));
+                            break;
+                        }
+
+                        session.Network.EnqueueSend(new GameMessageSystemChat("Usage: /b s <account> <amount>  OR  /b s <account> <item> <amount>", ChatMessageType.Broadcast));
+                        break;
+                    case "balance":
+                    case "b":
+                        var acb = Managers.BankManager.GetAccountByOwner(player.Guid.Full);
+                        if (acb == null) { session.Network.EnqueueSend(new GameMessageSystemChat("No bank account. Create one with /bank create", ChatMessageType.Broadcast)); break; }
+                        var report = Managers.BankManager.GetBalanceReport(acb);
+                        // Always list pyreals and luminance even if 0
+                        session.Network.EnqueueSend(new GameMessageSystemChat(report, ChatMessageType.Broadcast));
+                        break;
+                    default:
+                        session.Network.EnqueueSend(new GameMessageSystemChat("Unknown bank command. Use /bank for help", ChatMessageType.Broadcast));
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                log.Error("HandleBank error", ex);
+                session.Network.EnqueueSend(new GameMessageSystemChat("Bank command failed due to server error.", ChatMessageType.Broadcast));
+            }
         }
 
         // quest info (uses GDLe formatting to match plugin expectations)

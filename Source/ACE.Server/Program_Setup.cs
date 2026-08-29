@@ -513,15 +513,36 @@ namespace ACE.Server
 
                     var dbname = config.MySql.World.Database;
 
+                    // Support SQL scripts that use DELIMITER directives (client-side only)
+                    var currentDelimiter = ";";
+
                     while ((line = sr.ReadLine()) != null)
                     {
-                        line = line.Replace("ace_world", dbname);
-                        //do minimal amount of work here
-                        if (line.EndsWith(";"))
+                        var trimmed = line.Trim();
+                        // handle DELIMITER directive
+                        if (trimmed.StartsWith("DELIMITER ", StringComparison.OrdinalIgnoreCase))
                         {
-                            completeSQLline += line + Environment.NewLine;
+                            currentDelimiter = trimmed.Substring("DELIMITER ".Length);
+                            continue;
+                        }
 
-                            var script = new MySqlConnector.MySqlCommand(completeSQLline, sqlConnect);
+                        line = line.Replace("ace_world", dbname);
+
+                        completeSQLline += line + Environment.NewLine;
+
+                        // check for end of statement by current delimiter
+                        if (trimmed.EndsWith(currentDelimiter))
+                        {
+                            // remove the delimiter from the end of the statement
+                            var sqlToExec = completeSQLline;
+                            if (currentDelimiter != ";")
+                            {
+                                var idx = sqlToExec.LastIndexOf(currentDelimiter, StringComparison.Ordinal);
+                                if (idx >= 0)
+                                    sqlToExec = sqlToExec.Substring(0, idx);
+                            }
+
+                            var script = new MySqlConnector.MySqlCommand(sqlToExec, sqlConnect);
                             try
                             {
                                 ExecuteScript(script);
@@ -532,8 +553,6 @@ namespace ACE.Server
                             }
                             completeSQLline = string.Empty;
                         }
-                        else
-                            completeSQLline += line + Environment.NewLine;
                     }
                 }
                 Console.WriteLine(" complete!");
@@ -553,8 +572,28 @@ namespace ACE.Server
             {
                 scriptCommand.Connection.Open();
             }
-            scriptCommand.ExecuteNonQuery();
-            Console.Write(".");
+            try
+            {
+                scriptCommand.ExecuteNonQuery();
+                Console.Write(".");
+            }
+            catch (MySqlConnector.MySqlException ex)
+            {
+                // Treat duplicate-key errors as non-fatal during bulk import so repeated imports
+                // or overlapping content folders don't stop the process. Log a short marker
+                // instead of failing the entire import. Other MySQL errors are re-thrown.
+                try
+                {
+                    if (!string.IsNullOrEmpty(ex.Message) && ex.Message.IndexOf("Duplicate entry", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        Console.Write(".");
+                        return;
+                    }
+                }
+                catch { }
+
+                throw;
+            }
         }
 
         private static void CleanupConnection(MySqlConnector.MySqlConnection connection)

@@ -1,3 +1,6 @@
+using System;
+using System.Data.Common;
+using Microsoft.EntityFrameworkCore;
 using ACE.Common;
 using ACE.Entity;
 using ACE.Entity.Enum;
@@ -1070,6 +1073,102 @@ namespace ACE.Server.WorldObjects
         {
             get => GetProperty(PropertyInt.LumAugSkilledSpec) ?? 0;
             set { if (value == 0) RemoveProperty(PropertyInt.LumAugSkilledSpec); else SetProperty(PropertyInt.LumAugSkilledSpec, value); }
+        }
+        // ========================================
+        // ======= Luminous Item Permanent Bonuses ====
+        // ========================================
+
+        /// <summary>
+        /// Cumulative permanent percent bonus to Item Enchantment spells (stored as integer percent, e.g., 2 == +2%)
+        /// </summary>
+        public int LuminousItemSpellPercent
+        {
+            get => GetProperty(PropertyInt.LuminousItemSpellPercent) ?? 0;
+            set { if (value == 0) RemoveProperty(PropertyInt.LuminousItemSpellPercent); else SetProperty(PropertyInt.LuminousItemSpellPercent, value); }
+        }
+
+        /// <summary>
+        /// Cumulative permanent percent bonus to Creature Enchantment spells
+        /// </summary>
+        public int LuminousCreatureSpellPercent
+        {
+            get => GetProperty(PropertyInt.LuminousCreatureSpellPercent) ?? 0;
+            set { if (value == 0) RemoveProperty(PropertyInt.LuminousCreatureSpellPercent); else SetProperty(PropertyInt.LuminousCreatureSpellPercent, value); }
+        }
+
+        /// <summary>
+        /// Cumulative permanent percent bonus to Life Magic spells
+        /// </summary>
+        public int LuminousLifeSpellPercent
+        {
+            get => GetProperty(PropertyInt.LuminousLifeSpellPercent) ?? 0;
+            set { if (value == 0) RemoveProperty(PropertyInt.LuminousLifeSpellPercent); else SetProperty(PropertyInt.LuminousLifeSpellPercent, value); }
+        }
+
+        /// <summary>
+        /// Cumulative permanent percent bonus to War Magic spells
+        /// </summary>
+        public int LuminousWarSpellPercent
+        {
+            get => GetProperty(PropertyInt.LuminousWarSpellPercent) ?? 0;
+            set { if (value == 0) RemoveProperty(PropertyInt.LuminousWarSpellPercent); else SetProperty(PropertyInt.LuminousWarSpellPercent, value); }
+        }
+
+        /// <summary>
+        /// Load luminous values from the player_permanent_modifiers table and populate player properties.
+        /// This should be called after the player object has been created / logged in.
+        /// </summary>
+        public void LoadLuminousFromDatabase()
+        {
+            try
+            {
+                using (var ctx = new ACE.Database.Models.World.WorldDbContext())
+                {
+                    var conn = ctx.Database.GetDbConnection();
+                    conn.Open();
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = "SELECT modifier_key, value FROM player_permanent_modifiers WHERE player_id = @id";
+                        var p = cmd.CreateParameter();
+                        p.ParameterName = "@id";
+                        p.Value = Guid.Full;
+                        cmd.Parameters.Add(p);
+
+                        using (var reader = cmd.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                var key = reader.GetString(0);
+                                var val = reader.GetDecimal(1);
+
+                                switch (key)
+                                {
+                                    case "luminous:item":
+                                        LuminousItemSpellPercent = (int)Math.Round(val);
+                                        Session?.Network.EnqueueSend(new ACE.Server.Network.GameMessages.Messages.GameMessagePrivateUpdatePropertyInt(this, PropertyInt.LuminousItemSpellPercent, LuminousItemSpellPercent));
+                                        break;
+                                    case "luminous:creature":
+                                        LuminousCreatureSpellPercent = (int)Math.Round(val);
+                                        Session?.Network.EnqueueSend(new ACE.Server.Network.GameMessages.Messages.GameMessagePrivateUpdatePropertyInt(this, PropertyInt.LuminousCreatureSpellPercent, LuminousCreatureSpellPercent));
+                                        break;
+                                    case "luminous:life":
+                                        LuminousLifeSpellPercent = (int)Math.Round(val);
+                                        Session?.Network.EnqueueSend(new ACE.Server.Network.GameMessages.Messages.GameMessagePrivateUpdatePropertyInt(this, PropertyInt.LuminousLifeSpellPercent, LuminousLifeSpellPercent));
+                                        break;
+                                    case "luminous:war":
+                                        LuminousWarSpellPercent = (int)Math.Round(val);
+                                        Session?.Network.EnqueueSend(new ACE.Server.Network.GameMessages.Messages.GameMessagePrivateUpdatePropertyInt(this, PropertyInt.LuminousWarSpellPercent, LuminousWarSpellPercent));
+                                        break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"LoadLuminousFromDatabase failed for {Name}: {ex.Message}");
+            }
         }
 
         // ============== Masteries ===============

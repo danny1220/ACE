@@ -427,6 +427,16 @@ namespace ACE.Server.Managers
 
             AllegianceManager.LoadPlayer(player);
 
+            // Load persistent luminous modifiers from DB into player properties
+            try
+            {
+                player.LoadLuminousFromDatabase();
+            }
+            catch (Exception ex)
+            {
+                log.Warn($"Failed to load luminous modifiers for {player.Name}: {ex.Message}");
+            }
+
             player.SendFriendStatusUpdates(false, !player.GetAppearOffline());
 
             return true;

@@ -650,6 +650,11 @@ namespace ACE.Entity.Enum.Properties
         VisualClothingPriority                   = 9013,
         SquelchGlobal                            = 9014,
         InventoryOrder                           = 9015,
+        // Luminous permanent spell strength modifiers (custom properties)
+        LuminousItemSpellPercent                 = 9020,
+        LuminousCreatureSpellPercent             = 9021,
+        LuminousLifeSpellPercent                 = 9022,
+        LuminousWarSpellPercent                  = 9023,
     }
 
     public static class PropertyIntExtensions

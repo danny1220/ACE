@@ -179,6 +179,16 @@
       "EnableDetailedErrors": false,
       "EnableSensitiveDataLogging": false
     }
+    ,
+    "PkAudit": {
+      "Host": "127.0.0.1",
+      "Port": 3306,
+      "Database": "ace_pk_audit",
+      "Username": "root",
+      "Password": "",
+      "EnableDetailedErrors": false,
+      "EnableSensitiveDataLogging": false
+    }
   },
   // This section can trigger events that may happen before the world starts up, or after it shuts down
   // The shard should be in a disconnected state from any running ACE world

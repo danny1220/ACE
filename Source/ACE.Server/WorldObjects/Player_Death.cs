@@ -15,6 +15,7 @@ using ACE.Server.Managers;
 using ACE.Server.Network.Structure;
 using ACE.Server.Network.GameEvent.Events;
 using ACE.Server.Network.GameMessages.Messages;
+using Microsoft.EntityFrameworkCore;
 
 namespace ACE.Server.WorldObjects
 {
@@ -106,6 +107,109 @@ namespace ACE.Server.WorldObjects
                 pkPlayer.PkTimestamp = Time.GetUnixTime();
                 pkPlayer.PlayerKillsPk++;
 
+                    // Audit PK event to PK audit database (best-effort)
+                    try
+                    {
+                        var pkEvt = new ACE.Database.Models.PkAudit.PkEvent()
+                        {
+                            KillerId = pkPlayer.Guid.Full,
+                            VictimId = this.Guid.Full,
+                            Zone = (Location != null) ? Location.GetMapCoordStr() : string.Empty,
+                            Details = $"{pkPlayer.Name} killed {Name}"
+                        };
+                        ACE.Database.DatabaseManager.PkAudit.WritePkEvent(pkEvt);
+                    }
+                    catch { }
+
+                // Sync player PK counters and timestamp to PK audit DB (best-effort)
+                try
+                {
+                    var state = new ACE.Database.Models.PkAudit.PkPlayerState()
+                    {
+                        PlayerId = pkPlayer.Guid.Full,
+                        PkTimestamp = pkPlayer.PkTimestamp,
+                        PkLevel = (int)pkPlayer.PkLevel,
+                        PlayerKillsPk = pkPlayer.PlayerKillsPk ?? 0,
+                        PlayerKillsPkl = pkPlayer.PlayerKillsPkl ?? 0
+                    };
+                    ACE.Database.DatabaseManager.PkAudit.WritePlayerState(state);
+                }
+                catch { }
+
+                // If this is the player's first PK kill (they've just turned PK), give them one starter trophy if they don't already have one
+                try
+                {
+                    if (pkPlayer.PlayerKillsPk == 1)
+                    {
+                        const uint pkTrophyWcid = 1000002u;
+
+                        // Check DB flag first, then inventory
+                        var hasFlag = false;
+                        try
+                        {
+                            using (var ctx = new ACE.Database.Models.World.WorldDbContext())
+                            {
+                                var conn = ctx.Database.GetDbConnection();
+                                conn.Open();
+                                using (var cmd = conn.CreateCommand())
+                                {
+                                    cmd.CommandText = "SELECT value FROM player_permanent_modifiers WHERE player_id = @id AND modifier_key = 'pkstarter_given' LIMIT 1";
+                                    var p = cmd.CreateParameter(); p.ParameterName = "@id"; p.Value = pkPlayer.Guid.Full; cmd.Parameters.Add(p);
+                                    var res = cmd.ExecuteScalar();
+                                    if (res != null && res != DBNull.Value)
+                                        hasFlag = true;
+                                }
+                            }
+                        }
+                        catch { }
+
+                        var existingCount = pkPlayer.GetNumInventoryItemsOfWCID(pkTrophyWcid);
+                        if (!hasFlag && existingCount == 0)
+                        {
+                            var starterTrophy = ACE.Server.Factories.WorldObjectFactory.CreateNewWorldObject(pkTrophyWcid);
+                            if (starterTrophy != null)
+                            {
+                                // clear binding flags
+                                try { starterTrophy.Bonded = null; } catch { }
+                                try { starterTrophy.Attuned = null; } catch { }
+                                try { starterTrophy.RemoveProperty(ACE.Entity.Enum.Properties.PropertyInstanceId.Owner); } catch { }
+                                try { starterTrophy.RemoveProperty(ACE.Entity.Enum.Properties.PropertyInstanceId.Bonded); } catch { }
+
+                                if (!pkPlayer.TryCreateInInventoryWithNetworking(starterTrophy))
+                                {
+                                    var lb = pkPlayer.CurrentLandblock;
+                                    if (lb != null)
+                                    {
+                                        if (!lb.AddWorldObject(starterTrophy))
+                                            starterTrophy.Destroy();
+                                        else
+                                            starterTrophy.EnqueueBroadcast(new ACE.Server.Network.GameMessages.Messages.GameMessageCreateObject(starterTrophy));
+                                    }
+                                    else
+                                        starterTrophy.Destroy();
+                                }
+
+                                // set DB flag so we don't grant again
+                                try
+                                {
+                                    using (var ctx = new ACE.Database.Models.World.WorldDbContext())
+                                    {
+                                        ctx.Database.ExecuteSqlRaw($"INSERT INTO player_permanent_modifiers (player_id, modifier_key, value) VALUES ({pkPlayer.Guid.Full}, 'pkstarter_given', 1) ON DUPLICATE KEY UPDATE value = value; ");
+                                    }
+                                }
+                                catch { }
+
+                                // Audit log for initial PK gift
+                                try { log.Info($"[PK_TROPHY_INITIAL] Granted starter WCID {pkTrophyWcid} to {pkPlayer.Name} (0x{pkPlayer.Guid.Full:X8}) upon turning PK at {DateTime.UtcNow:O}"); } catch { }
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Failed to grant initial PK trophy to {pkPlayer?.Name}: {ex.Message}");
+                }
+
                 var globalPKDe = $"{lastDamager.Name} has defeated {Name}!";
 
                 if ((Location.Cell & 0xFFFF) < 0x100)
@@ -114,9 +218,156 @@ namespace ACE.Server.WorldObjects
                 globalPKDe += "\n[PKDe]";
 
                 PlayerManager.BroadcastToAll(new GameMessageSystemChat(globalPKDe, ChatMessageType.Broadcast));
+
+                // Award PK trophy item to the killer if configured weenie exists
+                try
+                {
+                    // WCID for PK Trophy (from SQL patch)
+                    const uint pkTrophyWcid = 1000002u;
+
+                    var trophy = ACE.Server.Factories.WorldObjectFactory.CreateNewWorldObject(pkTrophyWcid);
+                    if (trophy != null)
+                    {
+                        // ensure trophy is not bonded or otherwise owner-bound so killer can freely trade/use it
+                        try
+                        {
+                            // clear bonded flag (int)
+                            try { trophy.Bonded = null; } catch { }
+
+                            // clear attuned flag
+                            try { trophy.Attuned = null; } catch { }
+
+                            // clear instance owner / bonded IIDs if present
+                            try { trophy.RemoveProperty(ACE.Entity.Enum.Properties.PropertyInstanceId.Owner); } catch { }
+                            try { trophy.RemoveProperty(ACE.Entity.Enum.Properties.PropertyInstanceId.Bonded); } catch { }
+                        }
+                        catch { }
+                        // Try to create the trophy in the killer's inventory; if that fails, drop it on the ground at killer's location
+                        if (!pkPlayer.TryCreateInInventoryWithNetworking(trophy))
+                        {
+                            // place on landblock at player location
+                            var lb = pkPlayer.CurrentLandblock;
+                            if (lb != null)
+                            {
+                                if (!lb.AddWorldObject(trophy))
+                                {
+                                    // fallback destroy if cannot add
+                                    trophy.Destroy();
+                                }
+                                else
+                                {
+                                    // broadcast creation so nearby players see it
+                                    trophy.EnqueueBroadcast(new ACE.Server.Network.GameMessages.Messages.GameMessageCreateObject(trophy));
+                                // Audit trophy drop (best-effort)
+                                try
+                                {
+                                    var audit = new ACE.Database.Models.PkAudit.TrophyAudit()
+                                    {
+                                        PlayerId = pkPlayer.Guid.Full,
+                                        TrophyId = pkTrophyWcid,
+                                        Description = $"Dropped trophy for {pkPlayer.Name} after killing {Name} at {DateTime.UtcNow:O}"
+                                    };
+                                    ACE.Database.DatabaseManager.PkAudit.WriteTrophyAudit(audit);
+                                }
+                                catch { }
+                                }
+                            }
+                            else
+                            {
+                            // Audit trophy awarded to inventory (best-effort)
+                            try
+                            {
+                                var audit = new ACE.Database.Models.PkAudit.TrophyAudit()
+                                {
+                                    PlayerId = pkPlayer.Guid.Full,
+                                    TrophyId = pkTrophyWcid,
+                                    Description = $"Awarded trophy (WCID {pkTrophyWcid}) to {pkPlayer.Name} after killing {Name} at {DateTime.UtcNow:O}"
+                                };
+                                ACE.Database.DatabaseManager.PkAudit.WriteTrophyAudit(audit);
+                            }
+                            catch { }
+                                trophy.Destroy();
+                            }
+                        }
+                        else
+                        {
+                            // saved by TryCreateInInventoryWithNetworking
+                        }
+
+                        // Audit log: who received the trophy, when, victim and killer guids, trophy wcid
+                        try
+                        {
+                            log.Info($"[PK_TROPHY] Awarded WCID {trophy.WeenieClassId} to {pkPlayer.Name} (0x{pkPlayer.Guid.Full:X8}) for killing {Name} (0x{Guid.Full:X8}) at {DateTime.UtcNow:O}");
+                        }
+                        catch { }
+
+                        // Insert PK event into database history table
+                        try
+                        {
+                            using (var ctx = new ACE.Database.Models.World.WorldDbContext())
+                            {
+                                var cellVal = Location?.Cell ?? 0;
+                                var sql = $"INSERT INTO player_pk_history (killer_player_id, victim_player_id, event_time, cell) VALUES ({pkPlayer.Guid.Full}, {Guid.Full}, NOW(), {cellVal});";
+                                ctx.Database.ExecuteSqlRaw(sql);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Failed to insert PK history: {ex.Message}");
+                        }
+
+                        // Announce current top PK killer to all players
+                        try
+                        {
+                            using (var ctx = new ACE.Database.Models.World.WorldDbContext())
+                            {
+                                var conn = ctx.Database.GetDbConnection();
+                                conn.Open();
+                                using (var cmd = conn.CreateCommand())
+                                {
+                                    cmd.CommandText = "SELECT killer_player_id, COUNT(*) AS cnt FROM player_pk_history GROUP BY killer_player_id ORDER BY cnt DESC LIMIT 1";
+                                    using (var reader = cmd.ExecuteReader())
+                                    {
+                                        if (reader.Read())
+                                        {
+                                            var topId = Convert.ToUInt32(reader.GetInt32(0));
+                                            var topCnt = reader.GetInt32(1);
+                                            var topPlayer = PlayerManager.FindByGuid(topId) as ACE.Server.WorldObjects.Player;
+                                            var topName = topPlayer != null ? topPlayer.Name : (PlayerManager.FindByGuid(topId)?.GetType().GetProperty("Name")?.GetValue(PlayerManager.FindByGuid(topId))?.ToString() ?? $"0x{topId:X8}");
+                                            var announce = $"Current top PK killer: {topName} with {topCnt} PK kills.";
+                                            PlayerManager.BroadcastToAll(new ACE.Server.Network.GameMessages.Messages.GameMessageSystemChat(announce, ACE.Entity.Enum.ChatMessageType.Broadcast));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Failed to award PK trophy: {ex.Message}");
+                }
             }
             else if (IsPKLiteDeath(topDamager))
+            {
                 pkPlayer.PlayerKillsPkl++;
+
+                // Sync PKLite count to PK audit DB (best-effort)
+                try
+                {
+                    var state = new ACE.Database.Models.PkAudit.PkPlayerState()
+                    {
+                        PlayerId = pkPlayer.Guid.Full,
+                        PkTimestamp = pkPlayer.PkTimestamp,
+                        PkLevel = (int)pkPlayer.PkLevel,
+                        PlayerKillsPk = pkPlayer.PlayerKillsPk ?? 0,
+                        PlayerKillsPkl = pkPlayer.PlayerKillsPkl ?? 0
+                    };
+                    ACE.Database.DatabaseManager.PkAudit.WritePlayerState(state);
+                }
+                catch { }
+            }
         }
 
         /// <summary>

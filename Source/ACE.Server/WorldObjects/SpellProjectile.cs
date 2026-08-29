@@ -760,6 +760,9 @@ namespace ACE.Server.WorldObjects
 
                 damage *= damageRatingMod * damageResistRatingMod;
 
+                // apply luminous multiplier for caster (affects all spell schools)
+                damage *= WorldObject.GetLuminousMultiplier(ProjectileSource, Spell.School);
+
                 percent = damage / target.Health.MaxValue;
 
                 //Console.WriteLine($"Damage rating: " + Creature.ModToRating(damageRatingMod));
@@ -1001,4 +1004,5 @@ namespace ACE.Server.WorldObjects
             observer.DebugDamageBuffer = null;
         }
     }
+// Placeholder to ensure context for patch application
 }

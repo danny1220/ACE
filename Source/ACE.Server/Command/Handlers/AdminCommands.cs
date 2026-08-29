@@ -74,6 +74,50 @@ namespace ACE.Server.Command.Handlers
                     session.Player.HandleAdminvisionToggle(-1);
                     break;
             }
+
+        }
+
+        [CommandHandler("bankables", AccessLevel.Admin, CommandHandlerFlag.None, "List or reload bankables from config")] 
+        public static void HandleBankables(Session session, params string[] parameters)
+        {
+            try
+            {
+                if (parameters.Length == 0 || parameters[0].Equals("list", StringComparison.OrdinalIgnoreCase))
+                {
+                    var list = ACE.Server.Managers.BankManager.GetBankableSummaries();
+                    if (list == null || list.Count == 0)
+                    {
+                        session.Network.EnqueueSend(new GameMessageSystemChat("No bankables configured.", ChatMessageType.Broadcast));
+                        return;
+                    }
+                    session.Network.EnqueueSend(new GameMessageSystemChat($"Bankables ({list.Count}):", ChatMessageType.Broadcast));
+                    foreach (var line in list)
+                        session.Network.EnqueueSend(new GameMessageSystemChat(line, ChatMessageType.Broadcast));
+                    return;
+                }
+
+                // Reload not supported at runtime; bankables are loaded at server startup
+
+                if (parameters[0].Equals("show", StringComparison.OrdinalIgnoreCase) && parameters.Length > 1)
+                {
+                    var name = string.Join(" ", parameters.Skip(1));
+                    var list = ACE.Server.Managers.BankManager.GetBankableSummaries();
+                    var matches = list.Where(l => l.IndexOf($"Name: {name}", StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+                    if (matches.Count == 0)
+                        session.Network.EnqueueSend(new GameMessageSystemChat($"No bankable found for '{name}'", ChatMessageType.Broadcast));
+                    else
+                        foreach (var m in matches)
+                            session.Network.EnqueueSend(new GameMessageSystemChat(m, ChatMessageType.Broadcast));
+                    return;
+                }
+
+                session.Network.EnqueueSend(new GameMessageSystemChat("Usage: /bankables [list|show <name>] - bankables loaded at server start", ChatMessageType.Broadcast));
+            }
+            catch (Exception ex)
+            {
+                log.Error("HandleBankables error", ex);
+                session.Network.EnqueueSend(new GameMessageSystemChat("Error processing bankables command.", ChatMessageType.Broadcast));
+            }
         }
 
         // adminui

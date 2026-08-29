@@ -95,6 +95,27 @@ namespace ACE.Server.Factories
                         loot.Add(lootWorldObject);
                 }
 
+                // Global xtreme token drop: allow any mob to drop an xtreme token based on server property
+                try
+                {
+                    var chance = PropertyManager.GetDouble("xtreme_token_drop_percent").Item; // percent (e.g., 0.5 = 0.5%)
+                    if (chance > 0)
+                    {
+                    var roll = ThreadSafeRandom.Next(0.0f, 1.0f);
+                        if (roll < (chance / 100.0))
+                        {
+                            // xtreme token WCID defined in bankables.json: 20000352
+                            var xtreme = WorldObjectFactory.CreateNewWorldObject(20000352u);
+                            if (xtreme != null)
+                                loot.Add(xtreme);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    log.Warn($"Failed to roll xtreme token drop: {ex.Message}");
+                }
+
                 return loot;
             }
             finally

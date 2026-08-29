@@ -305,6 +305,31 @@ namespace ACE.Server.WorldObjects
                 }
             }
 
+            // Grant accumulated luminance automatically when crossing configured grant level
+            try
+            {
+                var cfg = ACE.Server.Managers.LevelingManager.Config;
+                if (cfg != null)
+                {
+                    var grantLevel = cfg.luminanceGrantLevel;
+                    var maxLum = cfg.maxLuminance;
+
+                    if (startingLevel < grantLevel && (Level ?? 0) >= grantLevel)
+                    {
+                        // set maximum luminance to configured maximum but do NOT grant available luminance immediately
+                        MaximumLuminance = maxLum;
+                        AvailableLuminance = 0;
+                        // notify client of new maximum and that available luminance is 0
+                        Session.Network.EnqueueSend(new GameMessagePrivateUpdatePropertyInt64(this, PropertyInt64.MaximumLuminance, MaximumLuminance ?? 0), new GameMessagePrivateUpdatePropertyInt64(this, PropertyInt64.AvailableLuminance, AvailableLuminance ?? 0));
+                        Session.Network.EnqueueSend(new GameMessageSystemChat($"Your maximum luminance has been set to {maxLum:N0}. You will begin with 0 available luminance.", ChatMessageType.Broadcast));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                log.Warn($"LevelingManager luminance grant failed: {ex.Message}");
+            }
+
             if (Level > startingLevel)
             {
                 var message = (Level == maxLevel) ? $"You have reached the maximum level of {Level}!" : $"You are now level {Level}!";

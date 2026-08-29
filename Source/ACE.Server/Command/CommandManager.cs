@@ -114,6 +114,17 @@ namespace ACE.Server.Command
                 }
             }
 
+            // Diagnostic: log all registered commands so we can verify command handlers (e.g., /bank) are present at startup
+            try
+            {
+                var registered = string.Join(", ", commandHandlers.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase));
+                log.Info($"Registered commands: {registered}");
+            }
+            catch (Exception ex)
+            {
+                log.Warn($"Failed to enumerate registered commands: {ex.Message}");
+            }
+
             if (NonInteractiveConsole)
             {
                 log.Info("ACEmulator command prompt disabled - Environment.GetEnvironmentVariable(ACE_NONINTERACTIVE_CONSOLE) was true");
