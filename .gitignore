@@ -302,3 +302,12 @@ Database/tools/password.txt
 docker.env
 docker-compose.yml
 docker-compose.arm64
+
+# Visual Studio files
+.vs/
+*.user
+*.suo
+
+# Other common ignores
+bin/
+obj/
